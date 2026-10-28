@@ -2096,9 +2096,13 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
       if (fullScreen) {
         _portraitPinned = false;
         _portraitPinSuspended = false;
-        // Note: 全屏沉浸式走原生 WindowInsetsController（阅读器同款，已在
-        // 澎湃 OS 2.0 真机验证）。legacy 的 SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        // 在 target 36 的 edge-to-edge 强制下会被系统忽略（issue #176）。
+        // Note: 全屏沉浸式走原生 WindowInsetsController，与阅读器同一条
+        // 路径。证据分两层：`ReaderSystemBarsSession` 那一套（`systemBars()`
+        // + transient 行为 + cutout + 焦点重放）已在澎湃 OS 2.0 真机上验证能
+        // 藏住手势导航条；播放页只是把同一个会话实例接进来，**本身目前只有
+        // CI 构建与代码审查级证据，真机行为待实机确认**。改走原生是因为
+        // legacy 的 SYSTEM_UI_FLAG_IMMERSIVE_STICKY 在 target 36 的
+        // edge-to-edge 强制下会被系统忽略（issue #176）。
         await _systemBars.enter();
         // 官方「全屏观看」= 起一个独立 `ShortSeriesLandActivity`，manifest 里
         // `android:screenOrientation="userLandscape"`：全屏**一律横屏**，与片源
@@ -4373,6 +4377,22 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
                     _showLandscapeQualitySheet,
                   ),
                 ],
+                // 横屏态此前没有任何全屏出口：整屏时含「全屏观看」胶囊的
+                // `_information` 被 `!landscape` 一刀切掉，底条也没有对应
+                // 节点，用户只能先转回竖屏才能进沉浸态。分屏紧凑条
+                // (`compact-fullscreen`) 与运输条 (`_transport`) 都已有同款
+                // 入口，这里补第三处。图标版无文字、与字号解耦，不会撑破
+                // 这一行的固定 40dp 高。
+                const SizedBox(width: 20),
+                _landIconButton(
+                  'landscape-fullscreen',
+                  _fullScreen
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  _fullScreen ? '退出全屏' : '全屏',
+                  _toggleFullScreen,
+                  minSize: 40,
+                ),
               ],
             ),
           ),

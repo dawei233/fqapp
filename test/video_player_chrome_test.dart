@@ -113,7 +113,7 @@ void main() {
       await _rotateToLandscape(tester);
       expect(find.byKey(const ValueKey('landscape-play')), findsOneWidget);
       expect(find.byKey(const ValueKey('landscape-episodes')), findsOneWidget);
-      expect(find.byTooltip('退出全屏'), findsNothing);
+      expect(find.byKey(const ValueKey('landscape-fullscreen')), findsOneWidget);
       expect(find.byTooltip('快进10秒'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
       await player.dispose();
