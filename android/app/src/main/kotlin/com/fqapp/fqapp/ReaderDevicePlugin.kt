@@ -43,6 +43,7 @@ class ReaderDevicePlugin : FlutterPlugin, ActivityAware,
     private var session: String? = null
     private val brightness = ReaderBrightnessSession()
     private val systemBars = ReaderSystemBarsSession()
+    private lateinit var systemBarsChannel: MethodChannel
     private val windowFocusListener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
         if (focused) systemBars.reapply()
     }
@@ -62,6 +63,11 @@ class ReaderDevicePlugin : FlutterPlugin, ActivityAware,
         events = EventChannel(binding.binaryMessenger, "fqapp/reader/events")
         methods.setMethodCallHandler(this)
         events.setStreamHandler(this)
+        // 播放页全屏的沉浸式入口，与阅读页共用同一个 `systemBars` 会话对象：
+        // 会话按 owner 归属，后开者接管、先关者不影响别人。这里只暴露系统栏
+        // 方法，不碰阅读页的亮度/事件/字体语义。
+        systemBarsChannel = MethodChannel(binding.binaryMessenger, "fqapp/system_bars")
+        systemBarsChannel.setMethodCallHandler(::handleSystemBarsCall)
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -162,6 +168,7 @@ class ReaderDevicePlugin : FlutterPlugin, ActivityAware,
         onCancel(null)
         methods.setMethodCallHandler(null)
         events.setStreamHandler(null)
+        systemBarsChannel.setMethodCallHandler(null)
         filesExecutor.shutdownNow()
     }
 
@@ -234,6 +241,31 @@ class ReaderDevicePlugin : FlutterPlugin, ActivityAware,
             }
             else -> result.notImplemented()
         }
+    }
+
+    // 与阅读页的 `setImmersive` 分开解析参数、共用同一个会话对象。放在独立
+    // 方法里而不是 `onAttachedToEngine` 的 lambda 里：那里的参数名 `binding`
+    // 是引擎绑定，会遮蔽下面的 Activity 绑定字段。
+    private fun handleSystemBarsCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method != "setImmersive") {
+            result.notImplemented()
+            return
+        }
+        val id = call.argument<String>("session")
+        if (id.isNullOrEmpty()) {
+            result.error("BAD_SESSION", "系统栏会话已结束", null)
+            return
+        }
+        if (call.argument<Boolean>("enabled") == true) {
+            if (binding == null) {
+                result.error("NO_ACTIVITY", "播放界面尚未就绪", null)
+                return
+            }
+            systemBars.open(id, call.argument<Boolean>("showStatusBar") == true)
+        } else {
+            systemBars.close(id)
+        }
+        result.success(null)
     }
 
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {

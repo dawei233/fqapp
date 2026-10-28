@@ -17,6 +17,7 @@ import '../services/playback_gesture_levels.dart';
 import '../services/player_layout_preferences.dart';
 import '../services/player_preferences.dart';
 import '../services/player_style_config.dart';
+import '../services/player_system_bars.dart';
 import '../services/short_series_font_scale.dart';
 import '../models/playlet_comment.dart';
 import 'home/home_design.dart';
@@ -433,6 +434,9 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
   int _rateGeneration = 0;
   Future<void> _systemUiUpdates = Future<void>.value();
   bool _systemUiTouched = false;
+
+  /// 播放页全屏的窗口级系统栏会话；见 [PlayerSystemBars]。
+  final _systemBars = PlayerSystemBars();
 
   /// 横滑调进度的起手位置与激活状态。null = 没有进行中的横滑；
   /// `_dragSeekActive` = 已证明是横向主导的拖动（见 [_updateDragSeek]）。
@@ -2092,7 +2096,10 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
       if (fullScreen) {
         _portraitPinned = false;
         _portraitPinSuspended = false;
-        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+        // Note: 全屏沉浸式走原生 WindowInsetsController（阅读器同款，已在
+        // 澎湃 OS 2.0 真机验证）。legacy 的 SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        // 在 target 36 的 edge-to-edge 强制下会被系统忽略（issue #176）。
+        await _systemBars.enter();
         // 官方「全屏观看」= 起一个独立 `ShortSeriesLandActivity`，manifest 里
         // `android:screenOrientation="userLandscape"`：全屏**一律横屏**，与片源
         // 是横版还是竖版无关，视频尺寸未知时也一样。不再按尺寸猜方向，也就
@@ -2147,7 +2154,7 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
             ? const [DeviceOrientation.portraitUp]
             : const <DeviceOrientation>[],
       );
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await _systemBars.exit();
     } catch (_) {}
   }
 
@@ -2166,6 +2173,13 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
       _portraitPinned = false;
       _portraitPinSuspended = true;
     } else {
+      if (_fullScreen) {
+        // 全屏态被别的路由盖住（如「原著」→ 阅读页）再回来：原生会话可能
+        // 已被上层页面收回（owner 不在本页了），重新领取一次；原生按 owner
+        // 校验，不会抢走别人的会话。
+        unawaited(_applySystemUi());
+        return;
+      }
       if (!_portraitPinSuspended) return;
       _portraitPinSuspended = false;
       _portraitPinned = true;
