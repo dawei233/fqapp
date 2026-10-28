@@ -139,6 +139,26 @@ Future<FakeNativePlayer> _mount(
 
 final _fullscreenButton = find.byKey(const ValueKey('landscape-fullscreen'));
 
+/// 把「设备转向」做成不可省的一步：`setSurfaceSize` 只改渲染尺寸，横竖屏判据
+/// 读的是 `tester.view.physicalSize`（见 [_mount] 的注释）。只调其中一个，用例
+/// 就可能在竖屏形态下静默通过 —— 空洞断言正是这样产生的。
+Future<void> _rotate(WidgetTester tester, Size window) async {
+  tester.view.physicalSize = window;
+  tester.view.devicePixelRatio = 1;
+  await tester.binding.setSurfaceSize(window);
+  await tester.pump();
+}
+
+/// 横屏前提的前置断言：横屏底条的节点必须在场，否则后面「找不到全屏钮」之类
+/// 的断言毫无意义（它可能只是因为整条底条都没渲染）。
+void _expectLandscapeStage() {
+  expect(
+    find.byKey(const ValueKey('landscape-play')),
+    findsOneWidget,
+    reason: '横屏底条未渲染 ⇒ 该用例的横屏前提不成立',
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -167,6 +187,11 @@ void main() {
       final orientations = _installPlatformLog();
       await _mount(tester, window: const Size(900, 420));
 
+      _expectLandscapeStage();
+      expect(
+        find.byKey(const ValueKey('player-fullscreen-pill')),
+        findsNothing,
+      );
       expect(_fullscreenButton, findsOneWidget);
       expect(find.byTooltip('全屏'), findsOneWidget);
       expect(bars.requests, isEmpty);
@@ -199,6 +224,7 @@ void main() {
     await _mount(tester, window: const Size(900, 420), openFullScreen: true);
 
     // 进页即全屏：底条入口直接显示「退出全屏」。
+    _expectLandscapeStage();
     expect(_fullscreenButton, findsOneWidget);
     expect(find.byTooltip('退出全屏'), findsOneWidget);
     expect(find.byIcon(Icons.fullscreen_exit_rounded), findsOneWidget);
@@ -213,6 +239,7 @@ void main() {
       _installPlatformLog();
       await _mount(tester, window: const Size(900, 420));
       expect(bars.requests, isEmpty);
+      _expectLandscapeStage();
       expect(
         find.byKey(const ValueKey('player-fullscreen-pill')),
         findsNothing,
@@ -234,8 +261,11 @@ void main() {
   ) async {
     _installPlatformLog();
     await _mount(tester, window: const Size(900, 420));
+    _expectLandscapeStage();
     await tester.pump(const Duration(seconds: 4));
-    // 未全屏时横屏底条照常 3 秒收起（既有行为）。
+    // 未全屏时横屏底条照常 3 秒收起（既有行为）；`landscape-play` 也一起消失
+    // 才能证明是「收起」而不是「横屏前提没成立」。
+    expect(find.byKey(const ValueKey('landscape-play')), findsNothing);
     expect(_fullscreenButton, findsNothing);
     await tester.tap(find.byKey(const ValueKey('video-surface')));
     await tester.pump(const Duration(milliseconds: 400));
@@ -259,6 +289,7 @@ void main() {
   ) async {
     _installPlatformLog();
     await _mount(tester, window: const Size(900, 420));
+    _expectLandscapeStage();
 
     // 面板打开：底条整体离屏（showChrome = !_panelOpen && !_overlayOpen）。
     await tester.tap(find.byKey(const ValueKey('landscape-episodes')));
@@ -275,16 +306,36 @@ void main() {
     tester,
   ) async {
     _installPlatformLog();
-    // 清屏入口只在竖屏底栏：「先在竖屏清屏，再把设备转横」是真实路径。
+    // 清屏入口只在竖屏底栏，但真实路径是「竖屏清屏 → 转横」：转横必须同时改
+    // physicalSize 与 surfaceSize（见 [_rotate]），否则仍然停在竖屏形态。
     await _mount(tester, window: const Size(400, 888));
     await tester.tap(find.byKey(const ValueKey('player-clear-screen')));
     await tester.pump();
-    await tester.binding.setSurfaceSize(const Size(900, 420));
-    await tester.pump();
+    expect(find.text('恢复'), findsOneWidget);
+    await _rotate(tester, const Size(900, 420));
+    // 前置断言：横屏前提必须真实成立。清屏态下整条底条不渲染，`landscape-play`
+    // 类 key 本就该消失，不能拿它当前提 ⇒ 这里断言两件事：
+    // (1) 设备朝向（`view.physicalSize`，也就是横竖屏判据真正读的那份）；
+    // (2) 渲染出来的 chrome 尺寸确实已经是横的。
+    expect(
+      tester.view.physicalSize.width,
+      greaterThan(tester.view.physicalSize.height),
+    );
+    final stage = tester.getSize(find.byType(VideoPlayerChrome));
+    expect(stage.width, greaterThan(stage.height));
+    expect(stage, const Size(900, 420));
+    expect(find.byKey(const ValueKey('video-surface')), findsOneWidget);
     expect(_fullscreenButton, findsNothing);
     expect(find.byKey(const ValueKey('landscape-play')), findsNothing);
+    expect(find.byKey(const ValueKey('landscape-seek')), findsNothing);
     // 横屏没有全屏出口也不能是死局：清屏态仍留着「恢复」文案出口。
     expect(find.text('恢复'), findsOneWidget);
+    // 恢复清屏 → 横屏底条连同全屏入口一起回来（证明前面「找不到」是因为清屏，
+    // 而不是因为横屏前提没成立）。
+    await tester.tap(find.text('恢复'));
+    await tester.pump();
+    _expectLandscapeStage();
+    expect(_fullscreenButton, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -321,6 +372,21 @@ void main() {
       mode: PlayerLayoutMode.split,
       withPanel: true,
     );
+    // 前置：确实处于分屏形态（紧凑条与左/上半区都在场），否则「横屏底条不在」
+    // 可能只是因为整页没渲染。分屏判据 `_shouldUseSplit` 只吃 `layoutMode`，
+    // 与窗口朝向无关 ⇒ 竖屏也要断言同一不变量。
+    expect(
+      find.byKey(const ValueKey('player-split-stage')),
+      findsOneWidget,
+      reason: '分屏形态未成立 ⇒ 该用例前提不成立',
+    );
+    expect(find.byKey(const ValueKey('compact-fullscreen')), findsOneWidget);
+    expect(_fullscreenButton, findsNothing);
+
+    // 同一不变量在横屏窗口下再验一次：`compact` 恒使 `landscapeBar` 为假
+    // （`landscapeBar = !compact && shortSeries && landscape`），不会冒出两颗。
+    await _rotate(tester, const Size(900, 420));
+    expect(find.byKey(const ValueKey('player-split-stage')), findsOneWidget);
     expect(find.byKey(const ValueKey('compact-fullscreen')), findsOneWidget);
     expect(_fullscreenButton, findsNothing);
     expect(tester.takeException(), isNull);
@@ -332,6 +398,7 @@ void main() {
     _installPlatformLog();
     // 控制行是固定 40dp 高：文字版在 2.5× 下会溢出，图标版与字号解耦。
     await _mount(tester, window: const Size(794, 361), textScale: 2.5);
+    _expectLandscapeStage();
     expect(_fullscreenButton, findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.tap(_fullscreenButton);
@@ -354,6 +421,7 @@ void main() {
       qualityVariants: variants,
       currentQualityUrl: 'u720',
     );
+    _expectLandscapeStage();
     expect(_fullscreenButton, findsOneWidget);
     final quality = tester.getRect(
       find.byKey(const ValueKey('landscape-quality')),
@@ -379,6 +447,12 @@ void main() {
   testWidgets('the portrait pill wording is unchanged', (tester) async {
     _installPlatformLog();
     await _mount(tester, window: const Size(400, 888));
+    // 前置：确实是竖屏形态（胶囊在场、横屏底条不在），然后才断言文案。
+    expect(
+      tester.view.physicalSize.width,
+      lessThan(tester.view.physicalSize.height),
+    );
+    expect(find.byKey(const ValueKey('landscape-play')), findsNothing);
     // 竖屏胶囊仍写「全屏观看」：新按钮只有 tooltip，不会撞上既有的
     // `find.text('全屏观看')` 断言。
     expect(find.text('全屏观看'), findsOneWidget);
@@ -388,6 +462,14 @@ void main() {
     );
     expect(_fullscreenButton, findsNothing);
     expect(find.byTooltip('全屏'), findsNothing);
+
+    // 反证：同一窗口转横后，胶囊消失、横屏入口出现、文案「全屏观看」不再存在
+    // —— 说明上面前提是真的按朝向分支的，不是恒绿。
+    await _rotate(tester, const Size(900, 420));
+    _expectLandscapeStage();
+    expect(find.text('全屏观看'), findsNothing);
+    expect(find.byKey(const ValueKey('player-fullscreen-pill')), findsNothing);
+    expect(_fullscreenButton, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
